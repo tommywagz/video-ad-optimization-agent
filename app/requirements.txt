@@ -44,6 +44,10 @@ numpy>=1.26.0
 # Deterministic chart rendering (app/tools/metrics_tools.py creative comparison)
 matplotlib>=3.8.0
 
+# UX API Gateway (app/api_gateway.py)
+fastapi>=0.115.0
+uvicorn>=0.30.0
+
 # =============================================================================
 # Testing Dependencies
 # =============================================================================

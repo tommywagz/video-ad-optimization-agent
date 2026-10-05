@@ -1,7 +1,7 @@
 # Makefile for Ad Campaign Agent
 # Compatible with agent-starter-pack deployment
 
-.PHONY: install dev playground deploy deploy-ae deploy-ae-global clean help test test-unit test-integration test-e2e test-all test-coverage setup-ae-permissions lint format demo-assets demo-assets-from-file demo-assets-build
+.PHONY: install dev api playground deploy deploy-ae deploy-ae-global clean help test test-unit test-integration test-e2e test-all test-coverage setup-ae-permissions lint format demo-assets demo-assets-from-file demo-assets-build
 
 # ============================================================================
 # LOCAL DEVELOPMENT
@@ -30,6 +30,15 @@ dev: demo-assets
 		.venv/bin/adk web --port 8501; \
 	else \
 		adk web --port 8501; \
+	fi
+
+## Run the REST API Gateway for the Web App UX (port 8000 by default; override with PORT=8000)
+PORT ?= 8000
+api: demo-assets
+	@if [ -d ".venv" ]; then \
+		.venv/bin/python -m app.api_gateway --port $(PORT); \
+	else \
+		python3 -m app.api_gateway --port $(PORT); \
 	fi
 
 ## Alias for dev
@@ -309,6 +318,7 @@ help:
 	@echo "  make install     - Install dependencies (creates .venv)"
 	@echo "  make install-uv  - Install dependencies with uv (faster)"
 	@echo "  make dev         - Run agent locally with ADK web UI (port 8501)"
+	@echo "  make api         - Run REST API Gateway for the Web App UX (port 8000)"
 	@echo "  make playground  - Alias for 'make dev'"
 	@echo ""
 	@echo "DEMO ASSETS (local-first mode):"

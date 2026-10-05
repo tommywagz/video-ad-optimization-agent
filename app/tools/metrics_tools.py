@@ -17,12 +17,23 @@
 import json
 import time
 from io import BytesIO
+from typing import Any
 
-from google import genai
-from google.adk.tools import ToolContext
-from google.genai import types
-from matplotlib.backends.backend_agg import FigureCanvasAgg
-from matplotlib.figure import Figure
+try:
+    from google import genai
+    from google.adk.tools import ToolContext
+    from google.genai import types
+except ModuleNotFoundError:
+    genai = None  # type: ignore[assignment]
+    ToolContext = Any  # type: ignore[assignment,misc]
+    types = None  # type: ignore[assignment]
+
+try:
+    from matplotlib.backends.backend_agg import FigureCanvasAgg
+    from matplotlib.figure import Figure
+except ModuleNotFoundError:
+    FigureCanvasAgg = None  # type: ignore[assignment,misc]
+    Figure = None  # type: ignore[assignment,misc]
 
 from ..config import IMAGE_GENERATION
 from ..database.db import get_db_cursor

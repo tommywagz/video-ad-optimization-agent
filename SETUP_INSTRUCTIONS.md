@@ -115,9 +115,10 @@ against the Morpheus host. Findings for both:
 
 ```bash
 make dev            # ADK web UI on :8501 (alias: make playground)
+make api            # REST API Gateway for the Web App UX on :8000 (Swagger UI at /docs)
 ```
 
-Open the printed local URL. `make reset-db` wipes `campaigns.db` and repopulates demo data on the next `make dev`.
+Open the printed local URL. `make reset-db` wipes `campaigns.db` and repopulates demo data on the next `make dev` or `make api`. See `docs/API_GATEWAY.md` for the full REST API reference mapping all 6 poster workflow steps, configurable video generation components, and dataset explorer endpoints.
 
 ## Metrics glossary
 
