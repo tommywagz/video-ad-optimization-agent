@@ -164,6 +164,7 @@ The gateway natively implements the frontend UX object specification defined in 
 
 | Document | Purpose |
 |---|---|
+| [`UX_SERVER_SPEC.md`](UX_SERVER_SPEC.md) | Technical handover specification outlining the rough `server.py` router for UX designers. |
 | [`docs/API_GATEWAY.md`](docs/API_GATEWAY.md) | Comprehensive REST API Gateway specification, endpoint catalog, and UX integration guide. |
 | [`object.js`](object.js) | Frontend UX object model and status enumeration reference. |
 | [`docs/METRICS.md`](docs/METRICS.md) | Single source of truth for BlueZoo audience metrics, dwell times, and POS revenue attribution. |
