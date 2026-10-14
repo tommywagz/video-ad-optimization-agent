@@ -37,9 +37,10 @@ Usage:
 
 # Initialize database and populate mock data on import
 # Wrapped in try-except for better error reporting in Agent Engine
-import sys
-
-from google.adk.agents import LlmAgent
+try:
+    from google.adk.agents import Agent
+except ImportError:
+    from google.adk.agents import LlmAgent as Agent
 
 # NOTE: BuiltInCodeExecutor cannot be used with function calling tools
 # It's mutually exclusive - you get either tools OR code execution, not both
@@ -186,7 +187,7 @@ The system has 4 product-centric campaigns:
 - Guide to Media Agent for video generation after campaign creation
 """
 
-campaign_agent = LlmAgent(
+campaign_agent = Agent(
     model=MODEL,
     name="campaign_agent",
     description="Manages ad campaigns (create, list, view, update) and store location/address lookup (plain store addresses only — Google Maps links and maps come from the Analytics Agent), AND onboards new products into the catalog: create_product, import_products_from_folder, generate_product_image. Any request to add, register, or onboard a product goes here.",
@@ -323,7 +324,7 @@ _MEDIA_AGENT_DESCRIPTION = "Browses the multi-vertical product catalog and gener
 if ENABLE_OMNI_EDIT:
     _MEDIA_AGENT_DESCRIPTION += " Does NOT edit existing videos -- edit/tweak requests on an already-generated video go to Review Agent instead."
 
-media_agent = LlmAgent(
+media_agent = Agent(
     model=MODEL,
     name="media_agent",
     description=_MEDIA_AGENT_DESCRIPTION,
@@ -447,7 +448,7 @@ All AI visualizations use Gemini 3 Pro Image and saved as artifacts.
 - Include clickable Google Maps links when showing locations
 """
 
-analytics_agent = LlmAgent(
+analytics_agent = Agent(
     model=MODEL,
     name="analytics_agent",
     description="Analyzes campaign metrics, finds top performers, generates insights, creates visual charts/infographics, and provides Google Maps integration with store locations, static maps, and AI-generated map visualizations",
@@ -596,7 +597,7 @@ _REVIEW_AGENT_DESCRIPTION = "Manages HITL video activation workflow: lists pendi
 if ENABLE_OMNI_EDIT:
     _REVIEW_AGENT_DESCRIPTION += " Also handles EDITING an existing generated video (a targeted visual tweak, e.g. 'edit video 5', 'make the background warmer') via the experimental edit_video_with_omni tool -- this is different from generating a brand-new video, which is Media Agent's job."
 
-review_agent = LlmAgent(
+review_agent = Agent(
     model=MODEL,
     name="review_agent",
     description=_REVIEW_AGENT_DESCRIPTION,
@@ -704,10 +705,13 @@ if ENABLE_OMNI_EDIT:
     COORDINATOR_INSTRUCTION = COORDINATOR_INSTRUCTION + _OMNI_EDIT_COORDINATOR_SECTION
 
 # Define the root coordinator agent with sub-agents
-root_agent = LlmAgent(
+root_agent = Agent(
     model=MODEL,
     name=APP_NAME,
     description=APP_DESCRIPTION,
     instruction=COORDINATOR_INSTRUCTION,
     sub_agents=[campaign_agent, media_agent, review_agent, analytics_agent],
 )
+
+# Backward compatibility alias for ADK 1.x consumers
+LlmAgent = Agent

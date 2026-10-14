@@ -482,3 +482,217 @@ class TestDatasetsExplorer:
 
         unknown = client.get("/api/v1/datasets/not_a_real_dataset")
         assert unknown.status_code == 404
+
+
+class TestUXDesignerObjects:
+    """Tests verifying complete support for UX Designer objects defined in `object.js`."""
+
+    def test_ux_enums_match_object_js_specification(self, client: GatewayClient) -> None:
+        resp = client.get("/api/v1/ux/enums")
+        assert resp.status_code == 200
+        data = resp.json()
+
+        # Status enum values from object.js
+        expected_status = {
+            "NONE": 0,
+            "GENERATING_ACTIVE": 1,
+            "GENERATING_COMPLETE": 2,
+            "GENERATING_FAILED": 3,
+            "REVIEW_NEEDED": 4,
+            "APPROVAL_UPDATED": 5,
+            "TESTING_ACTIVE": 6,
+            "TESTING_COMPLETE": 7,
+            "TESTING_FAILED": 8,
+        }
+        assert data["Status"] == expected_status
+
+        # ApprovalStatus enum values from object.js
+        expected_approval = {
+            "NONE": 0,
+            "APPROVED": 1,
+            "REJECTED": 2,
+        }
+        assert data["ApprovalStatus"] == expected_approval
+
+    def test_ux_schema_endpoint(self, client: GatewayClient) -> None:
+        resp = client.get("/api/v1/ux/schema")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "enums" in data
+        assert "campaign_schema" in data
+        assert "video_schema" in data
+
+    def test_ux_campaigns_list_and_detail_conforms_to_campaign_example(
+        self, client: GatewayClient
+    ) -> None:
+        resp = client.get("/api/v1/ux/campaigns")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "success"
+        assert data["total_count"] >= 4
+        assert len(data["campaigns"]) >= 4
+
+        camp = data["campaigns"][0]
+        # Verify all fields from campaignExample in object.js
+        assert isinstance(camp["id"], str)
+        assert len(camp["id"]) >= 6  # 6-digit formatted id e.g. "000001"
+        assert isinstance(camp["name"], str)
+        assert isinstance(camp["owner"], str)
+        assert isinstance(camp["shared_with"], list)
+        assert isinstance(camp["created_date"], str)
+        assert isinstance(camp["modified_date"], str)
+        assert isinstance(camp["is_template"], bool)
+        assert isinstance(camp["is_favorite"], bool)
+        assert isinstance(camp["is_archived"], bool)
+        assert isinstance(camp["status"], int)
+        assert isinstance(camp["status_meta"], dict)
+        assert "quantity" in camp["status_meta"]
+        assert "end_date" in camp["status_meta"]
+        assert isinstance(camp["thumbnail"], str)
+        assert isinstance(camp["description"], str)
+
+        # Settings block
+        settings = camp["settings"]
+        for section in ("overall", "items", "people", "performance", "setting", "audio"):
+            assert section in settings
+            assert "prompt" in settings[section]
+            assert "files" in settings[section]
+            assert isinstance(settings[section]["files"], list)
+
+        assert isinstance(settings["languages"], list)
+        assert "en-US" in settings["languages"]
+        assert isinstance(settings["guidelines"], list)
+        assert settings["format"]["duration"] == 8
+        assert isinstance(settings["format"]["aspect_ratios"], list)
+        assert settings["format"]["resolution"] == "1080p"
+        assert settings["testing"]["variants_per_generation"] == 10
+        assert settings["testing"]["duration"] == 24
+
+        # Videos collection
+        assert isinstance(camp["videos"], list)
+
+        # Test single campaign get
+        single_resp = client.get(f"/api/v1/ux/campaigns/{int(camp['id'])}")
+        assert single_resp.status_code == 200
+        single_camp = single_resp.json()
+        assert single_camp["id"] == camp["id"]
+        assert len(single_camp["videos"]) >= 1
+
+    def test_ux_videos_conform_to_video_example(self, client: GatewayClient) -> None:
+        resp = client.get("/api/v1/ux/videos")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "success"
+        assert data["total_count"] >= 4
+
+        video = data["videos"][0]
+        # Verify all fields from videoExample in object.js
+        assert isinstance(video["id"], str)
+        assert len(video["id"]) >= 6  # 6-digit formatted id e.g. "000001"
+        assert isinstance(video["name"], str)
+        assert isinstance(video["parent_id"], str)
+        assert isinstance(video["campaign_id"], str)
+        assert isinstance(video["created_date"], str)
+        assert isinstance(video["is_favorite"], bool)
+        assert isinstance(video["is_archived"], bool)
+        assert isinstance(video["approval_status"], int)
+        assert video["approval_status"] in (0, 1, 2)
+        assert isinstance(video["status"], int)
+        assert isinstance(video["status_meta"], dict)
+        assert "quantity" in video["status_meta"]
+        assert "end_date" in video["status_meta"]
+        assert isinstance(video["thumbnail"], str)
+        assert isinstance(video["description"], str)
+        assert isinstance(video["url"], str)
+        assert isinstance(video["testing_period"], dict)
+        assert "start_date" in video["testing_period"]
+        assert "end_date" in video["testing_period"]
+        assert isinstance(video["duration"], int)
+        assert isinstance(video["impressions"], int)
+        assert isinstance(video["impressions_id"], str)
+        assert isinstance(video["revenue"], (int, float))
+        assert isinstance(video["revenue_id"], str)
+        assert isinstance(video["rank"], int)
+        assert isinstance(video["settings"], dict)
+
+        # Test single video get
+        single_resp = client.get(f"/api/v1/ux/videos/{int(video['id'])}")
+        assert single_resp.status_code == 200
+        single_vid = single_resp.json()
+        assert single_vid["id"] == video["id"]
+
+    def test_format_ux_query_parameter_on_standard_endpoints(
+        self, client: GatewayClient
+    ) -> None:
+        # Standard campaigns with format=ux
+        camps_resp = client.get("/api/v1/campaigns", params={"format": "ux"})
+        assert camps_resp.status_code == 200
+        camps_data = camps_resp.json()
+        assert camps_data["status"] == "success"
+        assert isinstance(camps_data["campaigns"][0]["id"], str)
+        assert "settings" in camps_data["campaigns"][0]
+
+        # Standard single campaign with format=ux
+        single_camp_resp = client.get("/api/v1/campaigns/1", params={"format": "ux"})
+        assert single_camp_resp.status_code == 200
+        assert single_camp_resp.json()["id"] == "000001"
+        assert "videos" in single_camp_resp.json()
+
+        # Standard videos with format=ux
+        vids_resp = client.get("/api/v1/videos", params={"format": "ux"})
+        assert vids_resp.status_code == 200
+        vids_data = vids_resp.json()
+        assert vids_data["status"] == "success"
+        assert isinstance(vids_data["videos"][0]["id"], str)
+        assert "testing_period" in vids_data["videos"][0]
+
+        # Standard single video with format=ux
+        single_vid_resp = client.get("/api/v1/videos/1", params={"format": "ux"})
+        assert single_vid_resp.status_code == 200
+        assert single_vid_resp.json()["id"] == "000001"
+
+    def test_ux_campaign_create_and_update(self, client: GatewayClient) -> None:
+        create_payload = {
+            "name": "Summer Running Glasses Campaign",
+            "product_id": 1,
+            "store_name": "Santa Monica Pier",
+            "city": "Santa Monica",
+            "state": "CA",
+            "description": "High performance eyewear ad campaign",
+        }
+        resp = client.post("/api/v1/ux/campaigns", body=create_payload)
+        assert resp.status_code == 201
+        created = resp.json()
+        assert created["name"] == "Summer Running Glasses Campaign"
+        assert isinstance(created["id"], str)
+        assert "settings" in created
+
+        new_cid = int(created["id"])
+        # Update campaign
+        update_resp = client.patch(
+            f"/api/v1/ux/campaigns/{new_cid}",
+            body={"name": "Updated Running Glasses Campaign", "status": 5},
+        )
+        assert update_resp.status_code == 200
+        updated = update_resp.json()
+        assert updated["name"] == "Updated Running Glasses Campaign"
+        assert updated["status"] == 5
+
+    def test_ux_video_approval_workflow(self, client: GatewayClient) -> None:
+        # Check initial approval status of video 1
+        v1_resp = client.get("/api/v1/ux/videos/1")
+        assert v1_resp.status_code == 200
+
+        # Set approval status to APPROVED (1)
+        app_resp = client.post("/api/v1/ux/videos/1/approval", body={"approval_status": 1})
+        assert app_resp.status_code == 200
+        approved = app_resp.json()
+        assert approved["approval_status"] == 1
+        assert approved["status"] == 6  # TESTING_ACTIVE
+
+        # Set approval status to REJECTED (2) -> archived
+        rej_resp = client.post("/api/v1/ux/videos/1/approval", body={"approval_status": 2})
+        assert rej_resp.status_code == 200
+        rejected = rej_resp.json()
+        assert rejected["approval_status"] == 2
+        assert rejected["is_archived"] is True

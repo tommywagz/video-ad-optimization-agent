@@ -37,7 +37,7 @@ This demo showcases an **AI-powered in-store retail media platform** built with 
 
 ## Pre-Demo Checklist
 
-- [ ] ADK Web UI running (`adk web app` or Cloud Run URL)
+- [ ] ADK Web UI running (`make dev` on :8501 or Cloud Run URL) OR REST API Gateway (`make api` on :8000)
 - [ ] Product images available in GCS at `product-images/`
 - [ ] `GOOGLE_MAPS_API_KEY` set (for static maps)
 - [ ] Test one video generation to warm up models
@@ -888,3 +888,42 @@ never called — it isn't registered on the Review Agent in this configuration
 — and the agent doesn't claim to have performed a visual edit. This is the
 regression this journey exists to catch: the tool appearing here with the
 flag off/unset would mean the `ENABLE_OMNI_EDIT` gate broke.
+
+---
+
+## Act 7: Web Application & REST API Gateway Walkthrough
+
+For technical stakeholders, front-end developers, or UX teams integrating the agent into digital signage CMS or custom portals:
+
+### Scene 7.1: Start the API Gateway & Explore Interactive OpenAPI/Swagger Docs
+
+```bash
+make api
+```
+
+Navigate to `http://localhost:8000/docs` to demonstrate interactive execution across all endpoints.
+
+### Scene 7.2: Frontend UX Designer Object Model (`object.js`)
+
+Demonstrate how the backend natively satisfies the frontend UX schema:
+
+1. **Query Status Enums**:
+   `GET /api/v1/ux/enums`
+   Shows `Status` (0-8) and `ApprovalStatus` (0-2) enumerations.
+
+2. **Query Formatted Campaigns with Nested Video Collections**:
+   `GET /api/v1/ux/campaigns`
+   Shows `UXCampaign` objects with 6-digit IDs (`"000001"`), status metadata, complete generation settings (`overall`, `items`, `people`, `performance`, `setting`, `audio`, `format`, `testing`), and child `videos`.
+
+3. **1-Click Human-in-the-Loop Approval**:
+   `POST /api/v1/ux/videos/1/approval` with body `{"approval_status": 1}`.
+   Activates the video for in-store testing immediately (`status: 6` / `TESTING_ACTIVE`).
+
+4. **Multi-Agent Natural Language Querying via REST**:
+   `POST /api/v1/agents/chat` with body:
+   ```json
+   {
+     "prompt": "Which videos have the highest RPI?"
+   }
+   ```
+   Inspect the structured routing to `analytics_agent` with response metrics and data.

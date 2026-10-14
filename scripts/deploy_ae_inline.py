@@ -290,7 +290,7 @@ Examples:
     try:
         requirements = [
             "google-cloud-aiplatform[adk,agent_engines]>=1.79.0",
-            "google-adk>=1.21.0",
+            "google-adk>=2.0.0",
             "google-cloud-storage>=2.19.0",
             "google-genai>=2.14.0",
             "googlemaps>=4.10.0",

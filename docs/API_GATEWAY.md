@@ -235,3 +235,135 @@ python -m app.api_gateway --port 8000
   Paginated, filterable records for any dataset above.
 - **`POST /api/v1/datasets/seed`** & **`POST /api/v1/datasets/reset`**
   Seed or reset the database (`{"dataset_mode": "fashion", "force_reseed": true}` or `{"dataset_mode": "none"}`).
+
+---
+
+### 9. UX Designer Object Model & `object.js` Specification
+
+The API gateway natively supports the exact object specifications designed in [`object.js`](../object.js) for frontend web UX integration.
+
+#### A. Status & Approval Enums (`GET /api/v1/ux/enums`)
+
+- **Overall Campaign & Video Status (`Status`)**:
+  - `0`: `NONE`
+  - `1`: `GENERATING_ACTIVE`
+  - `2`: `GENERATING_COMPLETE`
+  - `3`: `GENERATING_FAILED`
+  - `4`: `REVIEW_NEEDED` (pending human-in-the-loop review)
+  - `5`: `APPROVAL_UPDATED` (paused / status updated)
+  - `6`: `TESTING_ACTIVE` (activated and running in-store tests)
+  - `7`: `TESTING_COMPLETE`
+  - `8`: `TESTING_FAILED`
+
+- **Video Approval Status (`ApprovalStatus`)**:
+  - `0`: `NONE` (pending approval)
+  - `1`: `APPROVED` (video live / activated)
+  - `2`: `REJECTED` (video archived)
+
+#### B. UX Campaign Object (`campaignExample`)
+
+Exposed via `GET /api/v1/ux/campaigns`, `GET /api/v1/ux/campaigns/{id}`, or `GET /api/v1/campaigns?format=ux`:
+
+```json
+{
+  "id": "000001",
+  "name": "Spring/Summer Sport Sunglasses",
+  "owner": "cid@domain.com",
+  "shared_with": ["tommy@domain.com", "fred@domain.com"],
+  "created_date": "2026-01-01T00:00:00Z",
+  "modified_date": "2026-01-01T00:00:00Z",
+  "is_template": false,
+  "is_favorite": false,
+  "is_archived": false,
+  "status": 6,
+  "status_meta": {
+    "quantity": 10,
+    "end_date": "2026-01-01T00:00:00Z"
+  },
+  "thumbnail": "/generated_assets/000001.jpg",
+  "description": "Commercial retail video campaign.",
+  "settings": {
+    "overall": { "prompt": "...", "files": [] },
+    "items": { "prompt": "...", "files": [] },
+    "people": { "prompt": "...", "files": [] },
+    "performance": { "prompt": "...", "files": [] },
+    "setting": { "prompt": "...", "files": [] },
+    "audio": { "prompt": "...", "files": [] },
+    "languages": ["en-US"],
+    "guidelines": [],
+    "format": { "duration": 8, "aspect_ratios": ["16:9"], "resolution": "1080p" },
+    "testing": { "variants_per_generation": 10, "rules": "...", "duration": 24 }
+  },
+  "videos": [ /* UXVideo objects */ ]
+}
+```
+
+#### C. UX Video Object (`videoExample`)
+
+Exposed via `GET /api/v1/ux/videos`, `GET /api/v1/ux/videos/{id}`, or `GET /api/v1/videos?format=ux`:
+
+```json
+{
+  "id": "000001",
+  "name": "000-000-001",
+  "parent_id": "000000",
+  "campaign_id": "000001",
+  "created_date": "2026-01-01T00:00:00Z",
+  "modified_date": "2026-01-01T00:00:00Z",
+  "is_favorite": false,
+  "is_archived": false,
+  "approval_status": 1,
+  "approval_date": "2026-01-01T00:00:00Z",
+  "status": 6,
+  "status_meta": { "quantity": 1, "end_date": "2026-01-01T00:00:00Z" },
+  "thumbnail": "/generated_assets/000001_000001.jpg",
+  "description": "Video ad variant prompt description.",
+  "url": "/generated_assets/000001_000001.mp4",
+  "testing_period": {
+    "start_date": "2026-01-01T00:00:00Z",
+    "end_date": "2026-01-01T00:00:00Z"
+  },
+  "duration": 8,
+  "impressions": 1000,
+  "impressions_id": "abcd1243",
+  "revenue": 123.45,
+  "revenue_id": "efgh5678",
+  "rank": 1,
+  "settings": { /* video-specific overrides */ }
+}
+```
+
+#### D. UX Endpoints Reference
+
+- **`GET /api/v1/ux/enums`**: Returns `Status` and `ApprovalStatus` enumeration dictionaries.
+- **`GET /api/v1/ux/schema`**: Returns JSON Schema definitions for `UXCampaign` and `UXVideo`.
+- **`GET /api/v1/ux/campaigns`**: Lists all campaigns formatted as `UXCampaign` objects with nested `videos`.
+- **`POST /api/v1/ux/campaigns`**: Creates a new campaign using UX Designer payload.
+- **`GET /api/v1/ux/campaigns/{id}`**: Returns a single `UXCampaign` with full `videos` collection.
+- **`PATCH /api/v1/ux/campaigns/{id}`**: Updates campaign name, description, or status integer.
+- **`GET /api/v1/ux/videos`**: Lists videos formatted as `UXVideo` objects.
+- **`GET /api/v1/ux/videos/{id}`**: Returns a single `UXVideo`.
+- **`PATCH /api/v1/ux/videos/{id}`**: Updates video status or properties.
+- **`POST /api/v1/ux/videos/{id}/approval`**: 1-click approval/rejection (`{"approval_status": 1}` for APPROVED, `2` for REJECTED).
+- **`?format=ux` Query Parameter**: Supported on standard `/api/v1/campaigns`, `/api/v1/campaigns/{id}`, `/api/v1/videos`, and `/api/v1/videos/{id}`.
+
+---
+
+### 10. Automated Testing & Verification
+
+The API Gateway is covered by unit and contract tests in [`tests/unit/test_api_gateway.py`](../tests/unit/test_api_gateway.py):
+
+```bash
+# Run the API Gateway test suite (24 tests, no LLM calls required)
+pytest tests/unit/test_api_gateway.py -v
+```
+
+The test suite validates:
+1. **Overview & Poster Blueprint**: Health check, KPI totals, and 6-step workflow mapping.
+2. **Step 1 Catalog & Agents**: Agent metadata, product listing/onboarding, campaign CRUD.
+3. **Step 2 Creative Generation**: Configurable components schema, presets, live prompt preview, single & batch generation.
+4. **Step 3 HITL Review**: Review queue, batch activation, pausing, archiving, and editing.
+5. **Steps 4 & 5 Analytics & Maps**: Top ads by RPI, campaign metrics/insights, regional comparisons, and static maps.
+6. **Step 6 Winning Formula & Chat Router**: Winning formula extraction/propagation, multi-agent chat intent routing for all poster prompts.
+7. **Datasets Explorer**: Schema and pagination across all 12 datasets, database seed/reset.
+8. **UX Designer Objects**: Exact conformance of `UXCampaign` and `UXVideo` against [`object.js`](../object.js), enum integrity, `?format=ux` query parameter, and approval state transitions.

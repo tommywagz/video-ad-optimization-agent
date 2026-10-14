@@ -118,11 +118,15 @@ make dev            # ADK web UI on :8501 (alias: make playground)
 make api            # REST API Gateway for the Web App UX on :8000 (Swagger UI at /docs)
 ```
 
-Open the printed local URL. `make reset-db` wipes `campaigns.db` and repopulates demo data on the next `make dev` or `make api`. See `docs/API_GATEWAY.md` for the full REST API reference mapping all 6 poster workflow steps, configurable video generation components, and dataset explorer endpoints.
+Open the printed local URL. `make reset-db` wipes `campaigns.db` and repopulates demo data on the next `make dev` or `make api`.
+- The **ADK Web UI** (`:8501`) provides an interactive chat interface for pair programming with the agents.
+- The **REST API Gateway** (`:8000`) provides JSON REST and WebSocket endpoints for frontend web apps, including complete 6-step poster workflow endpoints, all 12 dataset viewers, and dedicated UX Designer endpoints under `/api/v1/ux/*` matching the [`object.js`](object.js) specification.
+- If `fastapi` and `uvicorn` are present, interactive Swagger UI documentation is available at `http://localhost:8000/docs`. If absent, a built-in zero-dependency multi-threaded HTTP server runs automatically with full CORS support.
+- See [`docs/API_GATEWAY.md`](docs/API_GATEWAY.md) for the complete endpoint reference.
 
 ## Metrics glossary
 
-`docs/METRICS.md` is the single source of truth for what every metric means (impressions, RPI, revenue, circulation, dwell time), aligned to BlueZoo's own vocabulary — read it before touching any metric-related code. It supersedes the metric explanations scattered through code comments and the README's marketing prose; where they disagree, `docs/METRICS.md` wins. (README.md itself stays untouched per this file's header note.)
+`docs/METRICS.md` is the single source of truth for what every metric means (impressions, RPI, revenue, circulation, dwell time), aligned to BlueZoo's own vocabulary — read it before touching any metric-related code. It supersedes the metric explanations scattered through code comments; where they disagree, `docs/METRICS.md` wins.
 
 ## Test
 

@@ -50,7 +50,7 @@ import re
 import sys
 import types
 from datetime import date, datetime, timedelta
-from enum import Enum
+from enum import Enum, IntEnum
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
@@ -1891,6 +1891,458 @@ def _enrich_video_row(row_dict: dict[str, Any]) -> dict[str, Any]:
         out["video_url"] = out.get("gcs_path") or to_public_url(BUCKET_GENERATED, filename)
         out["gateway_video_url"] = f"/api/v1/assets/{BUCKET_GENERATED}/{filename}"
     return out
+
+
+# ============================================================================
+# UX DESIGNER OBJECT MODEL (object.js COMPATIBILITY)
+# ============================================================================
+
+
+class UXStatus(IntEnum):
+    """Statuses used for *both* overall status of campaigns *and* status of individual videos.
+
+    Matches `Status` enum in object.js exactly.
+    """
+
+    NONE = 0
+    GENERATING_ACTIVE = 1
+    GENERATING_COMPLETE = 2
+    GENERATING_FAILED = 3
+    REVIEW_NEEDED = 4
+    APPROVAL_UPDATED = 5
+    TESTING_ACTIVE = 6
+    TESTING_COMPLETE = 7
+    TESTING_FAILED = 8
+
+
+class UXApprovalStatus(IntEnum):
+    """Video approval statuses.
+
+    Matches `ApprovalStatus` enum in object.js exactly.
+    """
+
+    NONE = 0
+    APPROVED = 1
+    REJECTED = 2
+
+
+class UXSettingSection(BaseModel):
+    """Prompt + files indicating component details in campaign/video settings."""
+
+    prompt: str = ""
+    files: list[str] = Field(default_factory=list)
+
+
+class UXSettingsFormat(BaseModel):
+    """Format settings for generated videos."""
+
+    duration: int = 8
+    aspect_ratios: list[str] = Field(default_factory=lambda: ["16:9"])
+    resolution: str = "1080p"
+
+
+class UXSettingsTesting(BaseModel):
+    """Testing parameters for video variant generation."""
+
+    variants_per_generation: int = 10
+    rules: str | None = None
+    duration: int = 24
+
+
+class UXCampaignSettings(BaseModel):
+    """Default settings used for generating video variants in a campaign."""
+
+    overall: UXSettingSection = Field(default_factory=UXSettingSection)
+    items: UXSettingSection = Field(default_factory=UXSettingSection)
+    people: UXSettingSection = Field(default_factory=UXSettingSection)
+    performance: UXSettingSection = Field(default_factory=UXSettingSection)
+    setting: UXSettingSection = Field(default_factory=UXSettingSection)
+    audio: UXSettingSection = Field(default_factory=UXSettingSection)
+    languages: list[str] = Field(default_factory=lambda: ["en-US"])
+    guidelines: list[str] = Field(default_factory=list)
+    format: UXSettingsFormat = Field(default_factory=UXSettingsFormat)
+    testing: UXSettingsTesting = Field(default_factory=UXSettingsTesting)
+
+
+class UXVideo(BaseModel):
+    """Video object conforming to `videoExample` in object.js."""
+
+    id: str = "000001"
+    name: str = "000-000-001"
+    parent_id: str | None = "000000"
+    campaign_id: str | None = None
+    created_date: str = "2026-01-01T00:00:00Z"
+    modified_date: str | None = None
+    is_favorite: bool = False
+    is_archived: bool = False
+    approval_status: int = UXApprovalStatus.NONE
+    approval_date: str | None = None
+    status: int = UXStatus.TESTING_ACTIVE
+    status_meta: dict[str, Any] = Field(default_factory=dict)
+    thumbnail: str | None = None
+    description: str | None = None
+    url: str | None = None
+    testing_period: dict[str, str] | None = None
+    duration: int = 8
+    impressions: int = 0
+    impressions_id: str = ""
+    revenue: float = 0.0
+    revenue_id: str = ""
+    rank: int = 1
+    settings: dict[str, Any] = Field(default_factory=dict)
+
+
+class UXCampaign(BaseModel):
+    """Campaign object conforming to `campaignExample` in object.js."""
+
+    id: str = "000001"
+    name: str = "Campaign"
+    owner: str = "cid@domain.com"
+    shared_with: list[str] = Field(default_factory=lambda: ["tommy@domain.com", "fred@domain.com"])
+    created_date: str = "2026-01-01T00:00:00Z"
+    modified_date: str = "2026-01-01T00:00:00Z"
+    is_template: bool = False
+    is_favorite: bool = False
+    is_archived: bool = False
+    status: int = UXStatus.TESTING_ACTIVE
+    status_meta: dict[str, Any] = Field(default_factory=dict)
+    thumbnail: str | None = None
+    description: str | None = None
+    settings: dict[str, Any] = Field(default_factory=dict)
+    videos: list[UXVideo] = Field(default_factory=list)
+
+
+def map_video_status_to_ux(video_dict: dict[str, Any]) -> tuple[int, int]:
+    """Map backend video row to (UXStatus, UXApprovalStatus)."""
+    raw_status = str(video_dict.get("status") or "").strip().lower()
+    activated_at = video_dict.get("activated_at")
+
+    if raw_status == "archived":
+        approval = UXApprovalStatus.REJECTED
+    elif raw_status == "activated" or activated_at:
+        approval = UXApprovalStatus.APPROVED
+    else:
+        approval = UXApprovalStatus.NONE
+
+    if raw_status in ("generating", "pending"):
+        st = UXStatus.GENERATING_ACTIVE
+    elif raw_status in ("generating_failed", "failed"):
+        st = UXStatus.GENERATING_FAILED
+    elif raw_status == "generated":
+        st = UXStatus.REVIEW_NEEDED
+    elif raw_status == "paused":
+        st = UXStatus.APPROVAL_UPDATED
+    elif raw_status == "activated":
+        st = UXStatus.TESTING_ACTIVE
+    elif raw_status == "testing_complete":
+        st = UXStatus.TESTING_COMPLETE
+    elif raw_status == "testing_failed":
+        st = UXStatus.TESTING_FAILED
+    elif raw_status == "archived":
+        st = UXStatus.NONE
+    else:
+        st = UXStatus.REVIEW_NEEDED
+    return int(st), int(approval)
+
+
+def map_campaign_status_to_ux(
+    campaign_dict: dict[str, Any], videos: list[dict[str, Any]] | None = None
+) -> int:
+    """Map backend campaign row to UXStatus integer."""
+    raw = str(campaign_dict.get("status") or "").strip().lower()
+    if raw == "archived":
+        return int(UXStatus.NONE)
+    if raw in ("generating", "generating_active"):
+        return int(UXStatus.GENERATING_ACTIVE)
+    if raw == "generating_failed":
+        return int(UXStatus.GENERATING_FAILED)
+    if raw == "paused":
+        return int(UXStatus.APPROVAL_UPDATED)
+
+    if videos:
+        if any(str(v.get("status") or "").lower() == "activated" for v in videos):
+            return int(UXStatus.TESTING_ACTIVE)
+        if any(str(v.get("status") or "").lower() in ("generated", "review_needed") for v in videos):
+            return int(UXStatus.REVIEW_NEEDED)
+        if any(str(v.get("status") or "").lower() in ("generating", "pending") for v in videos):
+            return int(UXStatus.GENERATING_ACTIVE)
+
+    if raw in ("active", "testing_active"):
+        return int(UXStatus.TESTING_ACTIVE)
+    if raw == "testing_complete":
+        return int(UXStatus.TESTING_COMPLETE)
+    if raw == "draft":
+        return int(UXStatus.NONE)
+    return int(UXStatus.TESTING_ACTIVE)
+
+
+def to_ux_video(
+    video_row: dict[str, Any],
+    campaign_info: dict[str, Any] | None = None,
+    rank: int = 1,
+) -> dict[str, Any]:
+    """Transform backend campaign_videos row into the exact UX Designer `videoExample` object."""
+    v = _enrich_video_row(dict(video_row))
+    vid_id_int = int(v.get("id") or 1)
+    camp_id_int = int(v.get("campaign_id") or (campaign_info.get("id") if campaign_info else 1) or 1)
+
+    vid_id_str = f"{vid_id_int:06d}"
+    camp_id_str = f"{camp_id_int:06d}"
+    parent_id = f"{int(v['parent_video_id']):06d}" if v.get("parent_video_id") else "000000"
+
+    st, app_st = map_video_status_to_ux(v)
+
+    created_dt = v.get("created_at") or "2026-01-01T00:00:00Z"
+    if isinstance(created_dt, str) and not created_dt.endswith("Z") and "+" not in created_dt:
+        created_dt = f"{created_dt}Z"
+
+    mod_dt = v.get("activated_at") or v.get("created_at") or "2026-01-01T00:00:00Z"
+    if isinstance(mod_dt, str) and not mod_dt.endswith("Z") and "+" not in mod_dt:
+        mod_dt = f"{mod_dt}Z"
+
+    approval_date = v.get("activated_at")
+    if approval_date and not str(approval_date).endswith("Z") and "+" not in str(approval_date):
+        approval_date = f"{approval_date}Z"
+    elif app_st == UXApprovalStatus.APPROVED and not approval_date:
+        approval_date = created_dt
+
+    # Filename & asset paths
+    filename = v.get("video_filename")
+    if filename:
+        video_url = to_public_url(BUCKET_GENERATED, filename) or f"/api/v1/assets/{BUCKET_GENERATED}/{filename}"
+    else:
+        video_url = f"/generated_assets/{camp_id_str}_{vid_id_str}.mp4"
+
+    thumb_path = v.get("thumbnail_path") or v.get("thumbnail_filename")
+    if thumb_path:
+        thumb_name = str(thumb_path).split("/")[-1]
+        thumb_url = to_public_url(BUCKET_GENERATED, thumb_name) or f"/api/v1/assets/{BUCKET_GENERATED}/{thumb_name}"
+    else:
+        thumb_url = f"/generated_assets/{camp_id_str}_{vid_id_str}.jpg"
+
+    # Metrics
+    imp = int(v.get("total_impressions") or v.get("impressions") or 0)
+    rev = float(v.get("total_revenue") or v.get("revenue") or 0.0)
+
+    imp_id = hashlib.md5(f"imp-{vid_id_int}-{imp}".encode()).hexdigest()[:8]
+    rev_id = hashlib.md5(f"rev-{vid_id_int}-{rev}".encode()).hexdigest()[:8]
+
+    # Testing period from video_metrics if available
+    testing_period = None
+    try:
+        with get_db_cursor() as cursor:
+            cursor.execute(
+                "SELECT MIN(metric_date) as min_d, MAX(metric_date) as max_d FROM video_metrics WHERE video_id = ?",
+                (vid_id_int,),
+            )
+            r = cursor.fetchone()
+            if r and r["min_d"] and r["max_d"]:
+                testing_period = {
+                    "start_date": f"{r['min_d']}T00:00:00Z",
+                    "end_date": f"{r['max_d']}T23:59:59Z",
+                }
+    except Exception:
+        pass
+
+    if not testing_period:
+        testing_period = {
+            "start_date": created_dt,
+            "end_date": mod_dt,
+        }
+
+    status_meta: dict[str, Any] = {
+        "quantity": 1,
+        "end_date": testing_period["end_date"],
+    }
+    if v.get("status_message"):
+        status_meta["message"] = v["status_message"]
+
+    # Component settings overrides
+    vp = v.get("variation_params") or {}
+    video_settings: dict[str, Any] = {}
+    if vp:
+        if vp.get("setting"):
+            video_settings["setting"] = {"prompt": vp.get("setting"), "files": []}
+        if vp.get("mood"):
+            video_settings["overall"] = {"prompt": f"Mood: {vp.get('mood')}", "files": []}
+        if vp.get("model_ethnicity"):
+            video_settings["people"] = {"prompt": vp.get("model_ethnicity"), "files": []}
+        if vp.get("activity"):
+            video_settings["performance"] = {"prompt": vp.get("activity"), "files": []}
+        if vp.get("aspect_ratio"):
+            video_settings["format"] = {
+                "duration": int(v.get("duration_seconds") or 8),
+                "aspect_ratios": [vp.get("aspect_ratio")],
+                "resolution": "1080p",
+            }
+
+    name = v.get("name") or f"{camp_id_int:03d}-{vid_id_int:03d}-{int(rank):03d}"
+    desc = v.get("prompt_used") or v.get("scene_prompt") or v.get("video_prompt") or f"Variant video ad #{vid_id_str}"
+
+    return {
+        "id": vid_id_str,
+        "name": name,
+        "parent_id": parent_id,
+        "campaign_id": camp_id_str,
+        "created_date": created_dt,
+        "is_favorite": bool(v.get("is_favorite", False)),
+        "is_archived": bool(v.get("is_archived", (str(v.get("status") or "").lower() == "archived"))),
+        "approval_status": app_st,
+        "approval_date": approval_date,
+        "status": st,
+        "status_meta": status_meta,
+        "thumbnail": thumb_url,
+        "description": desc,
+        "url": video_url,
+        "testing_period": testing_period,
+        "duration": int(v.get("duration_seconds") or 8),
+        "impressions": imp,
+        "impressions_id": imp_id,
+        "revenue": round(rev, 2),
+        "revenue_id": rev_id,
+        "rank": int(rank),
+        "settings": video_settings,
+    }
+
+
+def to_ux_campaign(
+    campaign_row: dict[str, Any],
+    videos: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Transform backend campaign row into the exact UX Designer `campaignExample` object."""
+    c = dict(campaign_row)
+    cid_int = int(c.get("id") or 1)
+    cid_str = f"{cid_int:06d}"
+
+    raw_videos = videos if videos is not None else []
+    if videos is None:
+        try:
+            with get_db_cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT cv.*,
+                           COALESCE(SUM(vm.impressions), 0) as total_impressions,
+                           COALESCE(SUM(vm.revenue), 0.0) as total_revenue
+                    FROM campaign_videos cv
+                    LEFT JOIN video_metrics vm ON cv.id = vm.video_id
+                    WHERE cv.campaign_id = ?
+                    GROUP BY cv.id
+                    ORDER BY cv.id DESC
+                    """,
+                    (cid_int,),
+                )
+                raw_videos = [dict(r) for r in cursor.fetchall()]
+        except Exception:
+            raw_videos = []
+
+    # Sort videos by revenue/impressions descending to compute rank
+    sorted_vids = sorted(
+        raw_videos,
+        key=lambda x: (
+            float(x.get("total_revenue") or 0.0)
+            / (float(x.get("total_impressions") or 0) or 1.0)
+        ),
+        reverse=True,
+    )
+    ux_videos: list[dict[str, Any]] = []
+    for rank_idx, vid in enumerate(sorted_vids, 1):
+        ux_videos.append(to_ux_video(vid, campaign_info=c, rank=rank_idx))
+
+    st = map_campaign_status_to_ux(c, raw_videos)
+
+    created_dt = c.get("created_at") or "2026-01-01T00:00:00Z"
+    if isinstance(created_dt, str) and not created_dt.endswith("Z") and "+" not in created_dt:
+        created_dt = f"{created_dt}Z"
+
+    mod_dt = c.get("updated_at") or c.get("created_at") or "2026-01-01T00:00:00Z"
+    if isinstance(mod_dt, str) and not mod_dt.endswith("Z") and "+" not in mod_dt:
+        mod_dt = f"{mod_dt}Z"
+
+    # Status meta
+    end_date = "2026-01-01T00:00:00Z"
+    if ux_videos and ux_videos[0].get("testing_period"):
+        end_date = ux_videos[0]["testing_period"]["end_date"]
+    status_meta: dict[str, Any] = {
+        "quantity": len(ux_videos),
+        "end_date": end_date,
+    }
+    if c.get("status_message"):
+        status_meta["message"] = c["status_message"]
+
+    # Thumbnail
+    thumbnail = None
+    if ux_videos and ux_videos[0].get("thumbnail"):
+        thumbnail = ux_videos[0]["thumbnail"]
+    elif c.get("product_image_filename"):
+        thumbnail = to_public_url(BUCKET_PRODUCT_IMAGES, str(c["product_image_filename"]))
+    else:
+        thumbnail = f"/generated_assets/{cid_str}.jpg"
+
+    # Settings
+    prod_name = c.get("product_name") or "Featured Product"
+    prod_desc = c.get("product_description") or c.get("description") or f"Promotion for {prod_name}"
+    store_loc = f"{c.get('city', 'Los Angeles')}, {c.get('state', 'CA')}"
+
+    prod_files: list[str] = []
+    if c.get("product_image_filename"):
+        prod_files.append(to_public_url(BUCKET_PRODUCT_IMAGES, str(c["product_image_filename"])))
+
+    settings = {
+        "overall": {
+            "prompt": c.get("target_audience") or f"In-store retail video campaign for {prod_name} at {c.get('store_name', 'Flagship Store')}",
+            "files": [],
+        },
+        "items": {
+            "prompt": f"{prod_name}: {prod_desc}",
+            "files": prod_files,
+        },
+        "people": {
+            "prompt": "Diverse cast of contemporary models with poised editorial presence",
+            "files": [],
+        },
+        "performance": {
+            "prompt": "Walking naturally and posing to showcase the featured product in store",
+            "files": [],
+        },
+        "setting": {
+            "prompt": f"Premium retail store environment in {store_loc}",
+            "files": [],
+        },
+        "audio": {
+            "prompt": "Upbeat contemporary background music with subtle commercial flair",
+            "files": [],
+        },
+        "languages": ["en-US"],
+        "guidelines": [],
+        "format": {
+            "duration": 8,
+            "aspect_ratios": ["16:9"],
+            "resolution": "1080p",
+        },
+        "testing": {
+            "variants_per_generation": 10,
+            "rules": "/api/v1/videos/options",
+            "duration": 24,
+        },
+    }
+
+    return {
+        "id": cid_str,
+        "name": c.get("name") or f"Campaign #{cid_str}",
+        "owner": c.get("owner") or "cid@domain.com",
+        "shared_with": list(c.get("shared_with") or ["tommy@domain.com", "fred@domain.com"]),
+        "created_date": created_dt,
+        "modified_date": mod_dt,
+        "is_template": bool(c.get("is_template", False)),
+        "is_favorite": bool(c.get("is_favorite", False)),
+        "is_archived": bool(c.get("is_archived", (str(c.get("status") or "").lower() == "archived"))),
+        "status": st,
+        "status_meta": status_meta,
+        "thumbnail": thumbnail,
+        "description": c.get("description") or c.get("target_audience") or f"Campaign for {prod_name}",
+        "settings": settings,
+        "videos": ux_videos,
+    }
 
 
 # ============================================================================
@@ -4112,6 +4564,201 @@ class APIGatewayService:
         return path, mime or "application/octet-stream"
 
     # ------------------------------------------------------------------------
+    # 9. UX DESIGNER OBJECT MODEL METHODS (object.js COMPLIANCE)
+    # ------------------------------------------------------------------------
+
+    def get_ux_enums(self) -> dict[str, Any]:
+        """Return Status and ApprovalStatus enums as defined in object.js."""
+        return {
+            "Status": {
+                "NONE": int(UXStatus.NONE),
+                "GENERATING_ACTIVE": int(UXStatus.GENERATING_ACTIVE),
+                "GENERATING_COMPLETE": int(UXStatus.GENERATING_COMPLETE),
+                "GENERATING_FAILED": int(UXStatus.GENERATING_FAILED),
+                "REVIEW_NEEDED": int(UXStatus.REVIEW_NEEDED),
+                "APPROVAL_UPDATED": int(UXStatus.APPROVAL_UPDATED),
+                "TESTING_ACTIVE": int(UXStatus.TESTING_ACTIVE),
+                "TESTING_COMPLETE": int(UXStatus.TESTING_COMPLETE),
+                "TESTING_FAILED": int(UXStatus.TESTING_FAILED),
+            },
+            "ApprovalStatus": {
+                "NONE": int(UXApprovalStatus.NONE),
+                "APPROVED": int(UXApprovalStatus.APPROVED),
+                "REJECTED": int(UXApprovalStatus.REJECTED),
+            },
+        }
+
+    def get_ux_schema(self) -> dict[str, Any]:
+        """Return JSON schemas and example objects matching object.js."""
+        return {
+            "enums": self.get_ux_enums(),
+            "campaign_schema": UXCampaign.model_json_schema(),
+            "video_schema": UXVideo.model_json_schema(),
+        }
+
+    def list_ux_campaigns(
+        self,
+        status: str | None = None,
+        category: str | None = None,
+        state: str | None = None,
+        product_id: int | None = None,
+    ) -> list[dict[str, Any]]:
+        """List campaigns formatted as UX Designer Campaign objects."""
+        base_res = self.list_campaigns_filtered(
+            status=status, category=category, state=state, product_id=product_id
+        )
+        campaigns = base_res.get("campaigns", [])
+        return [to_ux_campaign(c) for c in campaigns]
+
+    def get_ux_campaign(self, campaign_id: int | str) -> dict[str, Any]:
+        """Get a single campaign formatted as a UX Designer Campaign object."""
+        try:
+            cid = int(campaign_id)
+        except (ValueError, TypeError):
+            return {"status": "error", "message": f"Invalid campaign_id: {campaign_id}"}
+
+        res = self.get_campaign_by_id(cid)
+        if res.get("status") == "error":
+            return res
+        camp = res.get("campaign", {})
+        videos = res.get("campaign_videos", [])
+        return to_ux_campaign(camp, videos=videos)
+
+    def create_ux_campaign(self, req: dict[str, Any]) -> dict[str, Any]:
+        """Create a new campaign from UX Designer payload and return UXCampaign."""
+        name = req.get("name") or "New Campaign"
+        desc = req.get("description") or ""
+        settings = req.get("settings") or {}
+        if not desc and settings.get("overall", {}).get("prompt"):
+            desc = settings["overall"]["prompt"]
+        prod_id = req.get("product_id") or 1
+        store = req.get("store_name") or "Retail Store"
+        city = req.get("city") or "Los Angeles"
+        state = req.get("state") or "CA"
+        category = req.get("category") or "always-on"
+
+        created = self.create_new_campaign(
+            CampaignCreateRequest(
+                product_id=int(prod_id),
+                store_name=str(store),
+                city=str(city),
+                state=str(state),
+                name=str(name),
+                target_audience=str(desc),
+                category=str(category),
+            )
+        )
+        if created.get("status") != "success":
+            return created
+        new_id = created.get("campaign_id") or created.get("campaign", {}).get("id")
+        return self.get_ux_campaign(new_id)
+
+    def update_ux_campaign(self, campaign_id: int | str, req: dict[str, Any]) -> dict[str, Any]:
+        """Update campaign using UX Designer payload and return updated UXCampaign."""
+        try:
+            cid = int(campaign_id)
+        except (ValueError, TypeError):
+            return {"status": "error", "message": f"Invalid campaign_id: {campaign_id}"}
+
+        name = req.get("name")
+        desc = req.get("description")
+        st_val = req.get("status")
+        status_str = None
+        if isinstance(st_val, int):
+            if st_val == UXStatus.NONE:
+                status_str = "archived"
+            elif st_val == UXStatus.APPROVAL_UPDATED:
+                status_str = "paused"
+            elif st_val in (UXStatus.TESTING_ACTIVE, UXStatus.TESTING_COMPLETE):
+                status_str = "active"
+        elif isinstance(st_val, str):
+            status_str = st_val
+
+        self.update_campaign_by_id(
+            cid,
+            CampaignUpdateRequest(name=name, target_audience=desc, status=status_str),
+        )
+        return self.get_ux_campaign(cid)
+
+    def list_ux_videos(
+        self,
+        campaign_id: int | None = None,
+        status: str | None = None,
+        approval_status: int | None = None,
+    ) -> list[dict[str, Any]]:
+        """List videos formatted as UX Designer Video objects."""
+        base_res = self.list_videos_filtered(campaign_id=campaign_id, status=status)
+        vids = base_res.get("videos", [])
+        ux_vids = [to_ux_video(v, rank=idx) for idx, v in enumerate(vids, 1)]
+        if approval_status is not None:
+            ux_vids = [v for v in ux_vids if v.get("approval_status") == int(approval_status)]
+        return ux_vids
+
+    def get_ux_video(self, video_id: int | str) -> dict[str, Any]:
+        """Get a single video formatted as a UX Designer Video object."""
+        try:
+            vid = int(video_id)
+        except (ValueError, TypeError):
+            return {"status": "error", "message": f"Invalid video_id: {video_id}"}
+
+        with get_db_cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT cv.*,
+                       c.name as campaign_name, c.store_name, c.city, c.state,
+                       COALESCE(SUM(vm.impressions), 0) as total_impressions,
+                       COALESCE(SUM(vm.revenue), 0.0) as total_revenue
+                FROM campaign_videos cv
+                LEFT JOIN campaigns c ON cv.campaign_id = c.id
+                LEFT JOIN video_metrics vm ON cv.id = vm.video_id
+                WHERE cv.id = ?
+                GROUP BY cv.id
+                """,
+                (vid,),
+            )
+            row = cursor.fetchone()
+            if not row:
+                return {"status": "error", "message": f"Video #{vid} not found"}
+            return to_ux_video(dict(row))
+
+    def update_ux_video(self, video_id: int | str, req: dict[str, Any]) -> dict[str, Any]:
+        """Update video fields from UX Designer payload."""
+        try:
+            vid = int(video_id)
+        except (ValueError, TypeError):
+            return {"status": "error", "message": f"Invalid video_id: {video_id}"}
+
+        app_st = req.get("approval_status")
+        if app_st is not None:
+            return self.set_ux_video_approval(vid, int(app_st))
+
+        st_val = req.get("status")
+        if st_val is not None:
+            if int(st_val) == UXStatus.TESTING_ACTIVE:
+                activate_video(video_id=vid)
+            elif int(st_val) == UXStatus.APPROVAL_UPDATED:
+                pause_video(video_id=vid)
+            elif int(st_val) == UXStatus.NONE:
+                archive_video(video_id=vid)
+
+        return self.get_ux_video(vid)
+
+    def set_ux_video_approval(self, video_id: int | str, approval_status: int) -> dict[str, Any]:
+        """Update video approval status (1=APPROVED, 2=REJECTED, 0=NONE)."""
+        try:
+            vid = int(video_id)
+        except (ValueError, TypeError):
+            return {"status": "error", "message": f"Invalid video_id: {video_id}"}
+
+        if approval_status == UXApprovalStatus.APPROVED:
+            activate_video(video_id=vid)
+        elif approval_status == UXApprovalStatus.REJECTED:
+            archive_video(video_id=vid)
+        else:
+            pause_video(video_id=vid)
+        return self.get_ux_video(vid)
+
+    # ------------------------------------------------------------------------
     # UNIFIED HTTP REQUEST DISPATCHER (WORKS WITH OR WITHOUT FASTAPI)
     # ------------------------------------------------------------------------
 
@@ -4173,8 +4820,68 @@ class APIGatewayService:
                 res = self.get_agent_info(agent_info_match.group(1))
                 return (200 if res["status"] == "success" else 404), res
 
+            # --- UX Designer Object Model (/api/v1/ux/*) ---
+            if m == "GET" and clean_path == "/api/v1/ux/enums":
+                return 200, self.get_ux_enums()
+            if m == "GET" and clean_path == "/api/v1/ux/schema":
+                return 200, self.get_ux_schema()
+            if m == "GET" and clean_path == "/api/v1/ux/campaigns":
+                camps = self.list_ux_campaigns(
+                    status=_str_param(q.get("status")),
+                    category=_str_param(q.get("category")),
+                    state=_str_param(q.get("state")),
+                    product_id=_int_param(q.get("product_id")),
+                )
+                return 200, {"status": "success", "total_count": len(camps), "campaigns": camps}
+            if m == "POST" and clean_path == "/api/v1/ux/campaigns":
+                res = self.create_ux_campaign(b)
+                return (201 if res.get("id") else 400), res
+
+            ux_camp_match = re.match(r"^/api/v1/ux/campaigns/(\d+)$", clean_path)
+            if ux_camp_match:
+                cid = int(ux_camp_match.group(1))
+                if m == "GET":
+                    res = self.get_ux_campaign(cid)
+                    return (200 if res.get("id") else 404), res
+                if m in ("PUT", "PATCH"):
+                    res = self.update_ux_campaign(cid, b)
+                    return (200 if res.get("id") else 400), res
+
+            if m == "GET" and clean_path == "/api/v1/ux/videos":
+                vids = self.list_ux_videos(
+                    campaign_id=_int_param(q.get("campaign_id")),
+                    status=_str_param(q.get("status")),
+                    approval_status=_int_param(q.get("approval_status")),
+                )
+                return 200, {"status": "success", "total_count": len(vids), "videos": vids}
+
+            ux_vid_app_match = re.match(r"^/api/v1/ux/videos/(\d+)/approval$", clean_path)
+            if m == "POST" and ux_vid_app_match:
+                vid = int(ux_vid_app_match.group(1))
+                app_st = _int_param(b.get("approval_status"), UXApprovalStatus.APPROVED) or UXApprovalStatus.APPROVED
+                res = self.set_ux_video_approval(vid, app_st)
+                return (200 if res.get("id") else 400), res
+
+            ux_vid_match = re.match(r"^/api/v1/ux/videos/(\d+)$", clean_path)
+            if ux_vid_match:
+                vid = int(ux_vid_match.group(1))
+                if m == "GET":
+                    res = self.get_ux_video(vid)
+                    return (200 if res.get("id") else 404), res
+                if m in ("PATCH", "PUT"):
+                    res = self.update_ux_video(vid, b)
+                    return (200 if res.get("id") else 400), res
+
             # --- Campaigns ---
             if m == "GET" and clean_path == "/api/v1/campaigns":
+                if _str_param(q.get("format")) == "ux":
+                    camps = self.list_ux_campaigns(
+                        status=_str_param(q.get("status")),
+                        category=_str_param(q.get("category")),
+                        state=_str_param(q.get("state")),
+                        product_id=_int_param(q.get("product_id")),
+                    )
+                    return 200, {"status": "success", "total_count": len(camps), "campaigns": camps}
                 return 200, self.list_campaigns_filtered(
                     status=_str_param(q.get("status")),
                     category=_str_param(q.get("category")),
@@ -4193,6 +4900,9 @@ class APIGatewayService:
             if camp_id_match:
                 cid = int(camp_id_match.group(1))
                 if m == "GET":
+                    if _str_param(q.get("format")) == "ux":
+                        res = self.get_ux_campaign(cid)
+                        return (200 if res.get("id") else 404), res
                     res = self.get_campaign_by_id(cid)
                     return (200 if res.get("status") == "success" else 404), res
                 if m in ("PATCH", "PUT"):
@@ -4256,6 +4966,13 @@ class APIGatewayService:
 
             # --- Step 3: HITL Review & Video Lifecycle ---
             if m == "GET" and clean_path == "/api/v1/videos":
+                if _str_param(q.get("format")) == "ux":
+                    vids = self.list_ux_videos(
+                        campaign_id=_int_param(q.get("campaign_id")),
+                        status=_str_param(q.get("status")),
+                        approval_status=_int_param(q.get("approval_status")),
+                    )
+                    return 200, {"status": "success", "total_count": len(vids), "videos": vids}
                 return 200, self.list_videos_filtered(
                     campaign_id=_int_param(q.get("campaign_id")),
                     status=_str_param(q.get("status")),
@@ -4327,7 +5044,11 @@ class APIGatewayService:
 
             vid_id_match = re.match(r"^/api/v1/videos/(\d+)$", clean_path)
             if m == "GET" and vid_id_match:
-                res = get_video_details(video_id=int(vid_id_match.group(1)))
+                vid = int(vid_id_match.group(1))
+                if _str_param(q.get("format")) == "ux":
+                    res = self.get_ux_video(vid)
+                    return (200 if res.get("id") else 404), res
+                res = get_video_details(video_id=vid)
                 return (200 if res.get("status") != "error" else 404), res
 
             # --- Step 4: Analytics & Metrics ---
@@ -4501,19 +5222,34 @@ class GatewayClient:
         return self.request("GET", url, params=params)
 
     def post(
-        self, url: str, json: dict[str, Any] | None = None, params: dict[str, Any] | None = None
+        self,
+        url: str,
+        json: dict[str, Any] | None = None,
+        body: dict[str, Any] | None = None,
+        params: dict[str, Any] | None = None,
     ) -> GatewayResponse:
-        return self.request("POST", url, params=params, json_body=json)
+        payload = json if json is not None else body
+        return self.request("POST", url, params=params, json_body=payload)
 
     def patch(
-        self, url: str, json: dict[str, Any] | None = None, params: dict[str, Any] | None = None
+        self,
+        url: str,
+        json: dict[str, Any] | None = None,
+        body: dict[str, Any] | None = None,
+        params: dict[str, Any] | None = None,
     ) -> GatewayResponse:
-        return self.request("PATCH", url, params=params, json_body=json)
+        payload = json if json is not None else body
+        return self.request("PATCH", url, params=params, json_body=payload)
 
     def put(
-        self, url: str, json: dict[str, Any] | None = None, params: dict[str, Any] | None = None
+        self,
+        url: str,
+        json: dict[str, Any] | None = None,
+        body: dict[str, Any] | None = None,
+        params: dict[str, Any] | None = None,
     ) -> GatewayResponse:
-        return self.request("PUT", url, params=params, json_body=json)
+        payload = json if json is not None else body
+        return self.request("PUT", url, params=params, json_body=payload)
 
 
 # ============================================================================
@@ -4606,6 +5342,87 @@ def create_fastapi_app(service: APIGatewayService | None = None) -> Any:
         req.agent_name = agent_name
         return svc.chat_with_agent(req)
 
+    # UX Designer Object Model (object.js compliance)
+    @app.get("/api/v1/ux/enums", tags=["UX Designer Object Model"])
+    def ux_enums() -> dict[str, Any]:
+        return svc.get_ux_enums()
+
+    @app.get("/api/v1/ux/schema", tags=["UX Designer Object Model"])
+    def ux_schema() -> dict[str, Any]:
+        return svc.get_ux_schema()
+
+    @app.get("/api/v1/ux/campaigns", tags=["UX Designer Object Model"])
+    def ux_campaigns_list(
+        status: str | None = None,
+        category: str | None = None,
+        state: str | None = None,
+        product_id: int | None = None,
+    ) -> dict[str, Any]:
+        svc.ensure_initialized()
+        camps = svc.list_ux_campaigns(status=status, category=category, state=state, product_id=product_id)
+        return {"status": "success", "total_count": len(camps), "campaigns": camps}
+
+    @app.post("/api/v1/ux/campaigns", status_code=201, tags=["UX Designer Object Model"])
+    def ux_campaigns_create(req: dict[str, Any]) -> Any:
+        svc.ensure_initialized()
+        res = svc.create_ux_campaign(req)
+        if not res.get("id"):
+            return JSONResponse(status_code=400, content=res)
+        return res
+
+    @app.get("/api/v1/ux/campaigns/{campaign_id}", tags=["UX Designer Object Model"])
+    def ux_campaigns_get(campaign_id: int) -> Any:
+        svc.ensure_initialized()
+        res = svc.get_ux_campaign(campaign_id)
+        if not res.get("id"):
+            return JSONResponse(status_code=404, content=res)
+        return res
+
+    @app.patch("/api/v1/ux/campaigns/{campaign_id}", tags=["UX Designer Object Model"])
+    @app.put("/api/v1/ux/campaigns/{campaign_id}", tags=["UX Designer Object Model"])
+    def ux_campaigns_update(campaign_id: int, req: dict[str, Any]) -> Any:
+        svc.ensure_initialized()
+        res = svc.update_ux_campaign(campaign_id, req)
+        if not res.get("id"):
+            return JSONResponse(status_code=400, content=res)
+        return res
+
+    @app.get("/api/v1/ux/videos", tags=["UX Designer Object Model"])
+    def ux_videos_list(
+        campaign_id: int | None = None,
+        status: str | None = None,
+        approval_status: int | None = None,
+    ) -> dict[str, Any]:
+        svc.ensure_initialized()
+        vids = svc.list_ux_videos(campaign_id=campaign_id, status=status, approval_status=approval_status)
+        return {"status": "success", "total_count": len(vids), "videos": vids}
+
+    @app.get("/api/v1/ux/videos/{video_id}", tags=["UX Designer Object Model"])
+    def ux_videos_get(video_id: int) -> Any:
+        svc.ensure_initialized()
+        res = svc.get_ux_video(video_id)
+        if not res.get("id"):
+            return JSONResponse(status_code=404, content=res)
+        return res
+
+    @app.patch("/api/v1/ux/videos/{video_id}", tags=["UX Designer Object Model"])
+    @app.put("/api/v1/ux/videos/{video_id}", tags=["UX Designer Object Model"])
+    def ux_videos_update(video_id: int, req: dict[str, Any]) -> Any:
+        svc.ensure_initialized()
+        res = svc.update_ux_video(video_id, req)
+        if not res.get("id"):
+            return JSONResponse(status_code=400, content=res)
+        return res
+
+    @app.post("/api/v1/ux/videos/{video_id}/approval", tags=["UX Designer Object Model"])
+    def ux_videos_set_approval(video_id: int, req: dict[str, Any]) -> Any:
+        svc.ensure_initialized()
+        app_st = req.get("approval_status", UXApprovalStatus.APPROVED)
+        res = svc.set_ux_video_approval(video_id, int(app_st))
+        if not res.get("id"):
+            return JSONResponse(status_code=400, content=res)
+        return res
+
     # Campaigns & Products
     @app.get("/api/v1/campaigns", tags=["Campaigns & Products"])
     def campaigns_list(
@@ -4613,8 +5430,12 @@ def create_fastapi_app(service: APIGatewayService | None = None) -> Any:
         category: str | None = None,
         state: str | None = None,
         product_id: int | None = None,
+        format: str | None = None,
     ) -> dict[str, Any]:
         svc.ensure_initialized()
+        if format == "ux":
+            camps = svc.list_ux_campaigns(status=status, category=category, state=state, product_id=product_id)
+            return {"status": "success", "total_count": len(camps), "campaigns": camps}
         return svc.list_campaigns_filtered(
             status=status, category=category, state=state, product_id=product_id
         )
@@ -4628,8 +5449,13 @@ def create_fastapi_app(service: APIGatewayService | None = None) -> Any:
         return res
 
     @app.get("/api/v1/campaigns/{campaign_id}", tags=["Campaigns & Products"])
-    def campaigns_get(campaign_id: int) -> Any:
+    def campaigns_get(campaign_id: int, format: str | None = None) -> Any:
         svc.ensure_initialized()
+        if format == "ux":
+            res = svc.get_ux_campaign(campaign_id)
+            if not res.get("id"):
+                return JSONResponse(status_code=404, content=res)
+            return res
         res = svc.get_campaign_by_id(campaign_id)
         if res.get("status") != "success":
             return JSONResponse(status_code=404, content=res)
@@ -4750,8 +5576,12 @@ def create_fastapi_app(service: APIGatewayService | None = None) -> Any:
         model_ethnicity: str | None = None,
         setting: str | None = None,
         mood: str | None = None,
+        format: str | None = None,
     ) -> dict[str, Any]:
         svc.ensure_initialized()
+        if format == "ux":
+            vids = svc.list_ux_videos(campaign_id=campaign_id, status=status)
+            return {"status": "success", "total_count": len(vids), "videos": vids}
         return svc.list_videos_filtered(
             campaign_id=campaign_id,
             status=status,
@@ -4782,8 +5612,13 @@ def create_fastapi_app(service: APIGatewayService | None = None) -> Any:
         return activate_batch(video_ids=req.video_ids, days_of_metrics=req.days_of_metrics)
 
     @app.get("/api/v1/videos/{video_id}", tags=["Step 3: HITL Review & Activation"])
-    def videos_get(video_id: int) -> Any:
+    def videos_get(video_id: int, format: str | None = None) -> Any:
         svc.ensure_initialized()
+        if format == "ux":
+            res = svc.get_ux_video(video_id)
+            if not res.get("id"):
+                return JSONResponse(status_code=404, content=res)
+            return res
         res = get_video_details(video_id=video_id)
         if res.get("status") == "error":
             return JSONResponse(status_code=404, content=res)

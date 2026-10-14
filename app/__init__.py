@@ -131,6 +131,7 @@ def _ensure_google_adk_fallback() -> None:
     genai_types_mod = types.ModuleType("google.genai.types")
     genai_interactions_mod = types.ModuleType("google.genai.interactions")
 
+    agents_mod.Agent = _LlmAgent  # type: ignore[attr-defined]
     agents_mod.LlmAgent = _LlmAgent  # type: ignore[attr-defined]
     tools_mod.ToolContext = _ToolContext  # type: ignore[attr-defined]
     adk_mod.agents = agents_mod  # type: ignore[attr-defined]
