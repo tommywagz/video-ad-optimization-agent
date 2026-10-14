@@ -135,3 +135,29 @@ def test_routing_instructions_mention_edit_handoff_when_enabled(monkeypatch):
         monkeypatch.delenv("ENABLE_OMNI_EDIT", raising=False)
         importlib.reload(config)
         importlib.reload(agent)
+
+
+def test_adk_agents_use_adk_2_agent_class():
+    """Ensure all agents are instances of google.adk.agents.Agent (ADK >= 2.0)."""
+    from google.adk.agents import Agent
+    from app.agent import (
+        campaign_agent,
+        media_agent,
+        review_agent,
+        analytics_agent,
+        root_agent,
+    )
+
+    agents = [campaign_agent, media_agent, review_agent, analytics_agent, root_agent]
+    for ag in agents:
+        assert isinstance(ag, Agent)
+        assert hasattr(ag, "name")
+        assert hasattr(ag, "description")
+        assert hasattr(ag, "instruction")
+
+    assert root_agent.sub_agents == [
+        campaign_agent,
+        media_agent,
+        review_agent,
+        analytics_agent,
+    ]
